@@ -17,7 +17,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const trimmedEmail = email.trim();
+    const trimmedEmail = email.trim().toLowerCase();
 
     // Check if real Supabase credentials are configured
     if (!isSupabaseConfigured()) {
@@ -42,6 +42,7 @@ export async function POST(request: Request) {
       headers: {
         'Content-Type': 'application/json',
         apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
         email: trimmedEmail,
