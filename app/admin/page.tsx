@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
@@ -21,9 +21,10 @@ import {
   Search,
 } from 'lucide-react';
 import { Product, Order } from '@/types';
-import { mockProducts, categories } from '@/lib/mockData';
+import { categories } from '@/lib/mockData';
 import PhotoEditorModal from '@/components/PhotoEditorModal';
 import ShopsBillingSection from '@/components/admin/ShopsBillingSection';
+import CustomPopup, { PopupConfig } from '@/components/CustomPopup';
 
 // ───────────────────────── helpers ─────────────────────────
 
@@ -71,8 +72,10 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>('products');
 
   // Products
-  const [products, setProducts] = useState<Product[]>(mockProducts);
+  const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isNewProduct, setIsNewProduct] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -87,6 +90,7 @@ export default function AdminDashboard() {
 
   // Error banner
   const [error, setError] = useState<string | null>(null);
+  const [popup, setPopup] = useState<PopupConfig | null>(null);
 
   // Patch the product being edited (removes the repeated spread everywhere)
   const patchEditing = (patch: Partial<Product>) =>
@@ -133,6 +137,13 @@ export default function AdminDashboard() {
     return () => clearTimeout(t);
   }, [error]);
 
+  // Debounce search input (250ms) to avoid re-filtering on every keystroke
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+  }, [search]);
+
   // ── handlers ──
   const handleLogout = async () => {
     try {
@@ -161,17 +172,26 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDeleteProduct = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to remove "${name}" from the store catalog?`)) return;
-
-    const snapshot = products;
-    setProducts((prev) => prev.filter((p) => p.id !== id));
-    try {
-      await api(`/api/products/${id}`, { method: 'DELETE' });
-    } catch (err) {
-      setProducts(snapshot); // roll back
-      setError(`Could not delete "${name}". Please try again.`);
-    }
+  const handleDeleteProduct = (id: string, name: string) => {
+    setPopup({
+      isOpen: true,
+      type: 'confirm',
+      destructive: true,
+      title: 'Remove Product?',
+      message: `Are you sure you want to remove "${name}" from the store catalog? It will no longer be visible to customers.`,
+      confirmText: 'Yes, Remove Product',
+      cancelText: 'Cancel',
+      onConfirm: async () => {
+        const snapshot = products;
+        setProducts((prev) => prev.filter((p) => p.id !== id));
+        try {
+          await api(`/api/products/${id}`, { method: 'DELETE' });
+        } catch (err) {
+          setProducts(snapshot); // roll back
+          setError(`Could not delete "${name}". Please try again.`);
+        }
+      },
+    });
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
@@ -299,7 +319,7 @@ export default function AdminDashboard() {
   }, [orders]);
 
   const filteredProducts = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     if (!q) return products;
     return products.filter(
       (p) =>
@@ -307,7 +327,7 @@ export default function AdminDashboard() {
         p.brand.toLowerCase().includes(q) ||
         p.category.toLowerCase().includes(q)
     );
-  }, [products, search]);
+  }, [products, debouncedSearch]);
 
   const tabs: { key: Tab; label: string; badge?: string }[] = [
     { key: 'products', label: `Products & Daily Availability (${products.length})` },
@@ -939,6 +959,9 @@ export default function AdminDashboard() {
         initialImageUrl={editingProduct?.image_url}
         onSave={handlePhotoSaved}
       />
+
+      {/* ── MOBILE FRIENDLY CUSTOM POPUP ── */}
+      <CustomPopup popup={popup} onClose={() => setPopup(null)} />
     </div>
   );
 }

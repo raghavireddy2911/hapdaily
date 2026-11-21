@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedSupabaseClient } from '@/lib/supabase-server';
 import { isSupabaseConfigured } from '@/lib/supabase-config';
-import { mockShopRates } from '@/lib/shops-mock';
 
 export async function GET(
   request: Request,
@@ -12,23 +11,18 @@ export async function GET(
     const hasSupabase = isSupabaseConfigured();
 
     if (hasSupabase) {
-      try {
-        const supabase = await getAuthenticatedSupabaseClient();
-        const { data: rates, error } = await supabase
-          .from('shop_rates')
-          .select('*')
-          .eq('shop_id', id);
+      const supabase = await getAuthenticatedSupabaseClient();
+      const { data: rates, error } = await supabase
+        .from('shop_rates')
+        .select('*')
+        .eq('shop_id', id);
 
-        if (!error && rates) {
-          return NextResponse.json({ success: true, rates, source: 'supabase' });
-        }
-      } catch (dbErr) {
-        // Fallback
+      if (!error && rates) {
+        return NextResponse.json({ success: true, rates, source: 'supabase' });
       }
     }
 
-    const rates = mockShopRates.filter((r) => r.shop_id === id);
-    return NextResponse.json({ success: true, rates, source: 'mock' });
+    return NextResponse.json({ success: true, rates: [], source: 'empty' });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
@@ -50,63 +44,43 @@ export async function POST(
     const hasSupabase = isSupabaseConfigured();
 
     if (hasSupabase) {
-      try {
-        const supabase = await getAuthenticatedSupabaseClient();
+      const supabase = await getAuthenticatedSupabaseClient();
 
-        for (const item of rates) {
-          const numRate = parseFloat(item.rate);
-          if (isNaN(numRate) || numRate <= 0) {
-            // Delete custom rate so it falls back to standard catalog price
-            await supabase
-              .from('shop_rates')
-              .delete()
-              .eq('shop_id', shop_id)
-              .eq('product_id', item.product_id);
-          } else {
-            // Upsert rate
-            await supabase.from('shop_rates').upsert(
-              {
-                shop_id,
-                product_id: item.product_id,
-                rate: numRate,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: 'shop_id,product_id' }
-            );
-          }
-        }
-
-        const { data: updatedRates } = await supabase
-          .from('shop_rates')
-          .select('*')
-          .eq('shop_id', shop_id);
-
-        return NextResponse.json({ success: true, rates: updatedRates || [] });
-      } catch (dbErr) {
-        // Fallback
-      }
-    }
-
-    // In-memory mock
-    for (const item of rates) {
-      const numRate = parseFloat(item.rate);
-      const idx = mockShopRates.findIndex(
-        (r) => r.shop_id === shop_id && r.product_id === item.product_id
-      );
-
-      if (isNaN(numRate) || numRate <= 0) {
-        if (idx !== -1) mockShopRates.splice(idx, 1);
-      } else {
-        if (idx !== -1) {
-          mockShopRates[idx].rate = numRate;
+      for (const item of rates) {
+        const numRate = parseFloat(item.rate);
+        if (isNaN(numRate) || numRate <= 0) {
+          // Delete custom rate so it falls back to standard catalog price
+          await supabase
+            .from('shop_rates')
+            .delete()
+            .eq('shop_id', shop_id)
+            .eq('product_id', item.product_id);
         } else {
-          mockShopRates.push({ shop_id, product_id: item.product_id, rate: numRate });
+          // Upsert rate
+          await supabase.from('shop_rates').upsert(
+            {
+              shop_id,
+              product_id: item.product_id,
+              rate: numRate,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'shop_id,product_id' }
+          );
         }
       }
+
+      const { data: updatedRates } = await supabase
+        .from('shop_rates')
+        .select('*')
+        .eq('shop_id', shop_id);
+
+      return NextResponse.json({ success: true, rates: updatedRates || [] });
     }
 
-    const currentRates = mockShopRates.filter((r) => r.shop_id === shop_id);
-    return NextResponse.json({ success: true, rates: currentRates });
+    return NextResponse.json(
+      { success: false, error: 'Supabase is not configured.' },
+      { status: 503 }
+    );
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }

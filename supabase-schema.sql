@@ -100,6 +100,17 @@ CREATE TABLE IF NOT EXISTS public.payments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- ── 8b. Performance Indexes (Ultra-fast mobile queries & billing) ──
+CREATE INDEX IF NOT EXISTS idx_shops_name ON public.shops(name);
+CREATE INDEX IF NOT EXISTS idx_deliveries_shop_date ON public.deliveries(shop_id, delivery_date DESC);
+CREATE INDEX IF NOT EXISTS idx_deliveries_date ON public.deliveries(delivery_date);
+CREATE INDEX IF NOT EXISTS idx_delivery_items_delivery_id ON public.delivery_items(delivery_id);
+CREATE INDEX IF NOT EXISTS idx_delivery_items_product_id ON public.delivery_items(product_id);
+CREATE INDEX IF NOT EXISTS idx_payments_shop_date ON public.payments(shop_id, payment_date DESC);
+CREATE INDEX IF NOT EXISTS idx_shop_rates_shop_prod ON public.shop_rates(shop_id, product_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON public.orders(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_products_brand ON public.products(brand, available);
+
 -- ── 9. Row Level Security (RLS) ──────────────────────────────
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;

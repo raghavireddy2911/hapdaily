@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Store,
@@ -31,6 +31,7 @@ import {
   Check,
 } from 'lucide-react';
 import { Shop, ShopRate, Delivery, Payment, Product } from '@/types';
+import CustomPopup, { PopupConfig } from '@/components/CustomPopup';
 
 interface ShopsBillingSectionProps {
   products: Product[];
@@ -47,6 +48,8 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
   });
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [filterStatus, setFilterStatus] = useState<'all' | 'unpaid' | 'paid'>('all');
 
   // Selected Shop for Detail/Billing View
@@ -67,12 +70,14 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
   // Modals
   const [showAddShopModal, setShowAddShopModal] = useState(false);
   const [editingShop, setEditingShop] = useState<Shop | null>(null);
+  const [shopSaving, setShopSaving] = useState(false);
 
   const [showDeliveryModal, setShowDeliveryModal] = useState(false);
   const [targetShopForDelivery, setTargetShopForDelivery] = useState<Shop | null>(null);
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [targetShopForPayment, setTargetShopForPayment] = useState<Shop | null>(null);
+  const [paymentSaving, setPaymentSaving] = useState(false);
 
   const [showRatesModal, setShowRatesModal] = useState(false);
   const [targetShopForRates, setTargetShopForRates] = useState<Shop | null>(null);
@@ -89,9 +94,17 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
 
   // Bill Date Filter
   const [billFilter, setBillFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
+  const [popup, setPopup] = useState<PopupConfig | null>(null);
+
+  // Debounce search
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+  }, [search]);
 
   // Load shops list
-  const loadShops = async () => {
+  const loadShops = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch('/api/admin/shops');
@@ -107,10 +120,10 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   // Load single shop details
-  const loadShopDetail = async (id: string) => {
+  const loadShopDetail = useCallback(async (id: string) => {
     setDetailLoading(true);
     try {
       const res = await fetch(`/api/admin/shops/${id}`);
@@ -128,10 +141,10 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
     } finally {
       setDetailLoading(false);
     }
-  };
+  }, []);
 
   // Load today's quick view
-  const loadTodayDeliveries = async () => {
+  const loadTodayDeliveries = useCallback(async () => {
     setTodayLoading(true);
     try {
       const res = await fetch('/api/admin/deliveries/today');
@@ -144,24 +157,24 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
     } finally {
       setTodayLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadShops();
-  }, []);
+  }, [loadShops]);
 
   useEffect(() => {
     if (selectedShopId) {
       loadShopDetail(selectedShopId);
     }
-  }, [selectedShopId]);
+  }, [selectedShopId, loadShopDetail]);
 
   // Filtered and Sorted Shops
   const filteredShops = useMemo(() => {
     let result = [...shops];
 
-    if (search.trim()) {
-      const q = search.toLowerCase();
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase();
       result = result.filter(
         (s) =>
           s.name.toLowerCase().includes(q) ||
@@ -181,56 +194,81 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
     result.sort((a, b) => (b.balance || 0) - (a.balance || 0));
 
     return result;
-  }, [shops, search, filterStatus]);
+  }, [shops, debouncedSearch, filterStatus]);
 
   // Handle Delete Shop
-  const handleDeleteShop = async (id: string, name: string) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete "${name}"? All deliveries, rates, and payments for this shop will be permanently removed.`
-      )
-    ) {
-      return;
-    }
-
-    try {
-      await fetch(`/api/admin/shops/${id}`, { method: 'DELETE' });
-      setShops((prev) => prev.filter((s) => s.id !== id));
-      if (selectedShopId === id) {
-        setSelectedShopId(null);
-      }
-      loadShops();
-    } catch (err) {
-      console.error('Failed to delete shop:', err);
-    }
+  const handleDeleteShop = (id: string, name: string) => {
+    setPopup({
+      isOpen: true,
+      type: 'confirm',
+      destructive: true,
+      title: 'Delete Shop?',
+      message: `Are you sure you want to delete "${name}"? All deliveries, rates, and payments for this shop will be permanently removed.`,
+      confirmText: 'Yes, Delete Shop',
+      cancelText: 'Cancel',
+      onConfirm: async () => {
+        try {
+          await fetch(`/api/admin/shops/${id}`, { method: 'DELETE' });
+          setShops((prev) => prev.filter((s) => s.id !== id));
+          if (selectedShopId === id) {
+            setSelectedShopId(null);
+          }
+          loadShops();
+        } catch (err) {
+          console.error('Failed to delete shop:', err);
+        }
+      },
+    });
   };
 
   // Handle Delete Delivery
-  const handleDeleteDelivery = async (deliveryId: string) => {
-    if (!selectedShopId || !confirm('Delete this delivery entry?')) return;
-    try {
-      await fetch(`/api/admin/shops/${selectedShopId}/deliveries/${deliveryId}`, {
-        method: 'DELETE',
-      });
-      loadShopDetail(selectedShopId);
-      loadShops();
-    } catch (err) {
-      console.error(err);
-    }
+  const handleDeleteDelivery = (deliveryId: string) => {
+    if (!selectedShopId) return;
+    setPopup({
+      isOpen: true,
+      type: 'confirm',
+      destructive: true,
+      title: 'Delete Delivery Entry?',
+      message: 'Are you sure you want to delete this delivery entry? The shop balance will be updated automatically.',
+      confirmText: 'Yes, Delete Entry',
+      cancelText: 'Cancel',
+      onConfirm: async () => {
+        try {
+          await fetch(`/api/admin/shops/${selectedShopId}/deliveries/${deliveryId}`, {
+            method: 'DELETE',
+          });
+          loadShopDetail(selectedShopId);
+          loadShops();
+        } catch (err) {
+          console.error(err);
+        }
+      },
+    });
   };
 
   // Handle Delete Payment
-  const handleDeletePayment = async (paymentId: string) => {
-    if (!selectedShopId || !confirm('Delete this payment receipt?')) return;
-    try {
-      await fetch(`/api/admin/shops/${selectedShopId}/payments?paymentId=${paymentId}`, {
-        method: 'DELETE',
-      });
-      loadShopDetail(selectedShopId);
-      loadShops();
-    } catch (err) {
-      console.error(err);
-    }
+  const handleDeletePayment = (paymentId: string) => {
+    if (!selectedShopId) return;
+    setPopup({
+      isOpen: true,
+      type: 'confirm',
+      destructive: true,
+      title: 'Delete Payment Receipt?',
+      message: 'Are you sure you want to delete this payment receipt? The shop balance will be updated automatically.',
+      confirmText: 'Yes, Delete Receipt',
+      cancelText: 'Cancel',
+      onConfirm: async () => {
+        try {
+          await fetch(`/api/admin/shops/${selectedShopId}/payments?paymentId=${paymentId}`, {
+            method: 'DELETE',
+          });
+          loadShopDetail(selectedShopId);
+          loadShops();
+        } catch (err) {
+          console.error(err);
+        }
+      },
+    });
   };
 
   // Helper to get rate for a product for a specific shop
@@ -622,6 +660,9 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
             )}
           </div>
         </div>
+
+        {/* Custom Mobile-Friendly Popup */}
+        <CustomPopup popup={popup} onClose={() => setPopup(null)} />
       </div>
     );
   }
@@ -977,6 +1018,8 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
+                  if (shopSaving) return;
+                  setShopSaving(true);
                   const form = e.currentTarget;
                   const payload = {
                     name: (form.elements.namedItem('name') as HTMLInputElement).value,
@@ -1004,6 +1047,8 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
                     loadShops();
                   } catch (err) {
                     console.error('Save shop error:', err);
+                  } finally {
+                    setShopSaving(false);
                   }
                 }}
                 className="space-y-3.5 text-xs sm:text-sm"
@@ -1081,9 +1126,17 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
                   </button>
                   <button
                     type="submit"
-                    className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-extrabold shadow-md hover:shadow-lg transition"
+                    disabled={shopSaving}
+                    className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-extrabold shadow-md hover:shadow-lg transition disabled:opacity-50 flex items-center gap-1.5"
                   >
-                    {editingShop ? 'Save Changes' : 'Create Shop'}
+                    {shopSaving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      editingShop ? 'Save Changes' : 'Create Shop'
+                    )}
                   </button>
                 </div>
               </form>
@@ -1149,6 +1202,7 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
+                  if (paymentSaving) return;
                   const form = e.currentTarget;
                   const amount = parseFloat(
                     (form.elements.namedItem('amount') as HTMLInputElement).value
@@ -1162,10 +1216,17 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
                   const notes = (form.elements.namedItem('notes') as HTMLInputElement).value;
 
                   if (isNaN(amount) || amount <= 0) {
-                    alert('Please enter a valid amount');
+                    setPopup({
+                      isOpen: true,
+                      type: 'alert',
+                      title: 'Invalid Payment Amount',
+                      message: 'Please enter a valid amount in rupees (greater than ₹0) to record this payment.',
+                      confirmText: 'OK',
+                    });
                     return;
                   }
 
+                  setPaymentSaving(true);
                   try {
                     await fetch(`/api/admin/shops/${targetShopForPayment.id}/payments`, {
                       method: 'POST',
@@ -1177,6 +1238,8 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
                     if (selectedShopId) loadShopDetail(selectedShopId);
                   } catch (err) {
                     console.error(err);
+                  } finally {
+                    setPaymentSaving(false);
                   }
                 }}
                 className="space-y-3.5 text-xs sm:text-sm"
@@ -1247,9 +1310,17 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
                   </button>
                   <button
                     type="submit"
-                    className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-extrabold shadow-md hover:shadow-lg transition"
+                    disabled={paymentSaving}
+                    className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-extrabold shadow-md hover:shadow-lg transition disabled:opacity-50 flex items-center gap-1.5"
                   >
-                    Save Payment Receipt
+                    {paymentSaving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      'Save Payment Receipt'
+                    )}
                   </button>
                 </div>
               </form>
@@ -1383,6 +1454,9 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
           </div>
         )}
       </AnimatePresence>
+
+      {/* Custom Mobile-Friendly Popup */}
+      <CustomPopup popup={popup} onClose={() => setPopup(null)} />
     </div>
   );
 }
@@ -1405,6 +1479,8 @@ function DailyDeliveryModal({
   const [notes, setNotes] = useState('');
   const [shopRates, setShopRates] = useState<ShopRate[]>([]);
   const [loadingRates, setLoadingRates] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [popup, setPopup] = useState<PopupConfig | null>(null);
 
   // Line items state
   const [lines, setLines] = useState<
@@ -1494,13 +1570,21 @@ function DailyDeliveryModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     const activeItems = lines.filter((it) => it.quantity > 0);
 
     if (activeItems.length === 0) {
-      alert('Please enter a quantity for at least one product.');
+      setPopup({
+        isOpen: true,
+        type: 'alert',
+        title: 'No Products Selected',
+        message: 'Please enter a quantity for at least one dairy product before saving today\'s delivery.',
+        confirmText: 'Understood',
+      });
       return;
     }
 
+    setSubmitting(true);
     try {
       const res = await fetch(`/api/admin/shops/${shop.id}/deliveries`, {
         method: 'POST',
@@ -1515,10 +1599,24 @@ function DailyDeliveryModal({
       if (data.success) {
         onSaved();
       } else {
-        alert(data.error || 'Failed to save delivery');
+        setPopup({
+          isOpen: true,
+          type: 'error',
+          title: 'Could Not Save Delivery',
+          message: data.error || 'Failed to save delivery. Please try again.',
+          confirmText: 'OK',
+        });
       }
     } catch (err: any) {
-      alert(err.message || 'Error saving delivery');
+      setPopup({
+        isOpen: true,
+        type: 'error',
+        title: 'Connection Error',
+        message: err.message || 'Error saving delivery. Please check network connection.',
+        confirmText: 'OK',
+      });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -1709,14 +1807,24 @@ function DailyDeliveryModal({
             </button>
             <button
               type="submit"
-              disabled={grandTotal <= 0}
-              className="px-6 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold shadow-lg disabled:opacity-50 transition"
+              disabled={grandTotal <= 0 || submitting}
+              className="px-6 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold shadow-lg disabled:opacity-50 transition flex items-center gap-1.5"
             >
-              Save Delivery (₹{grandTotal.toFixed(0)})
+              {submitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Saving Bill...</span>
+                </>
+              ) : (
+                `Save Delivery (₹${grandTotal.toFixed(0)})`
+              )}
             </button>
           </div>
         </form>
       </motion.div>
+
+      {/* Custom Mobile-Friendly Popup */}
+      <CustomPopup popup={popup} onClose={() => setPopup(null)} />
     </div>
   );
 }

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="hapGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669" />
+      <stop offset="100%" stop-color="#1e40af" />
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#f0fdf4" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Rounded Base Background -->
+  <rect width="512" height="512" rx="112" fill="url(#hapGrad)" />
+  
+  <!-- Subtle Glow Ring -->
+  <rect x="8" y="8" width="496" height="496" rx="104" fill="none" stroke="#ffffff" stroke-width="4" opacity="0.15" />
+  
+  <!-- Milk Drop Silhouette in Background -->
+  <path d="M256 70 C256 70, 180 180, 180 240 A76 76 0 0 0 332 240 C332 180, 256 70, 256 70 Z" fill="#ffffff" opacity="0.12" />
+  
+  <!-- Main HAP Lettermark -->
+  <text x="256" y="325" font-family="Arial, -apple-system, system-ui, sans-serif" font-size="144" font-weight="900" fill="url(#textGrad)" text-anchor="middle" letter-spacing="4">HAP</text>
+  
+  <!-- Subtitle DAILY -->
+  <text x="256" y="405" font-family="Arial, -apple-system, system-ui, sans-serif" font-size="44" font-weight="800" fill="#a7f3d0" text-anchor="middle" letter-spacing="12">DAILY</text>
+  
+  <!-- Small Star / Freshness Accent -->
+  <circle cx="256" cy="180" r="10" fill="#ffffff" opacity="0.8" />
+</svg>

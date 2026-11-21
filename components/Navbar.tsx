@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
-import { ShoppingCart, Milk, Menu, X, Shield, LogOut } from 'lucide-react';
+import { ShoppingCart, Milk, Menu, X, Shield, LogOut, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useRef, useState, useEffect } from 'react';
 
@@ -15,16 +15,20 @@ export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
 
-  // Check login status
-  const checkAuthStatus = async () => {
-    try {
-      const res = await fetch('/api/auth/me', { cache: 'no-store' });
-      const data = await res.json();
-      setIsLoggedIn(!!data.loggedIn);
-    } catch {
-      setIsLoggedIn(false);
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const standalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as any).standalone === true;
+      setIsStandalone(standalone);
     }
+  }, []);
+
+  // Fast cookie-based check — no network call on every route change
+  const checkAuthStatus = () => {
+    setIsLoggedIn(document.cookie.includes('sb-owner-email='));
   };
 
   useEffect(() => {
@@ -206,6 +210,23 @@ export default function Navbar() {
                   {link.label}
                 </Link>
               ))}
+
+              {/* Install HAP PWA Button (Visible on mobile web browsers) */}
+              {!isStandalone && (
+                <button
+                  onClick={async () => {
+                    setMenuOpen(false);
+                    const promptEvent = (window as any).__hapInstallPrompt;
+                    if (promptEvent) {
+                      await promptEvent.prompt();
+                    }
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-sm font-bold bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-800 border border-emerald-200/80 hover:bg-emerald-100 transition text-left"
+                >
+                  <Download className="w-4 h-4 text-emerald-600" />
+                  <span>Install HAP App</span>
+                </button>
+              )}
 
               {/* Mobile: Admin Dashboard & Logout only when logged in */}
               {isLoggedIn && (

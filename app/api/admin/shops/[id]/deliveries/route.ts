@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedSupabaseClient } from '@/lib/supabase-server';
 import { isSupabaseConfigured } from '@/lib/supabase-config';
-import { mockDeliveries } from '@/lib/shops-mock';
 
 export async function GET(
   request: Request,
@@ -12,39 +11,40 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const from = searchParams.get('from');
     const to = searchParams.get('to');
+    const limit = Math.min(parseInt(searchParams.get('limit') || '50', 10), 200);
+    const offset = parseInt(searchParams.get('offset') || '0', 10);
 
     const hasSupabase = isSupabaseConfigured();
 
     if (hasSupabase) {
-      try {
-        const supabase = await getAuthenticatedSupabaseClient();
-        let query = supabase
-          .from('deliveries')
-          .select('*, delivery_items(*)')
-          .eq('shop_id', id)
-          .order('delivery_date', { ascending: false });
+      const supabase = await getAuthenticatedSupabaseClient();
+      let query = supabase
+        .from('deliveries')
+        .select('*, delivery_items(*)')
+        .eq('shop_id', id)
+        .order('delivery_date', { ascending: false });
 
-        if (from) query = query.gte('delivery_date', from);
-        if (to) query = query.lte('delivery_date', to);
+      if (from) query = query.gte('delivery_date', from);
+      if (to) query = query.lte('delivery_date', to);
 
-        const { data, error } = await query;
-        if (!error && data) {
-          const formatted = data.map((d) => ({
-            ...d,
-            items: d.delivery_items || [],
-          }));
-          return NextResponse.json({ success: true, deliveries: formatted, source: 'supabase' });
-        }
-      } catch (dbErr) {
-        // Fallback
+      query = query.range(offset, offset + limit - 1);
+
+      const { data, error } = await query;
+      if (!error) {
+        const formatted = (data || []).map((d) => ({
+          ...d,
+          items: d.delivery_items || [],
+        }));
+        return NextResponse.json({
+          success: true,
+          deliveries: formatted,
+          hasMore: formatted.length === limit,
+          source: 'supabase',
+        });
       }
     }
 
-    let list = mockDeliveries.filter((d) => d.shop_id === id);
-    if (from) list = list.filter((d) => d.delivery_date >= from);
-    if (to) list = list.filter((d) => d.delivery_date <= to);
-
-    return NextResponse.json({ success: true, deliveries: list, source: 'mock' });
+    return NextResponse.json({ success: true, deliveries: [], source: 'empty' });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
@@ -95,72 +95,59 @@ export async function POST(
     const hasSupabase = isSupabaseConfigured();
 
     if (hasSupabase) {
-      try {
-        const supabase = await getAuthenticatedSupabaseClient();
+      const supabase = await getAuthenticatedSupabaseClient();
 
-        // 1. Insert into deliveries
-        const { data: delivery, error: delErr } = await supabase
-          .from('deliveries')
-          .insert([
-            {
-              shop_id,
-              delivery_date,
-              total_amount,
-              notes: notes ? notes.trim() : null,
-            },
-          ])
-          .select()
-          .single();
-
-        if (delErr || !delivery) {
-          throw new Error(delErr?.message || 'Failed to insert delivery');
-        }
-
-        // 2. Insert delivery_items
-        const itemsToInsert = processedItems.map((it) => ({
-          delivery_id: delivery.id,
-          product_id: it.product_id,
-          product_name: it.product_name,
-          product_unit: it.product_unit,
-          quantity: it.quantity,
-          rate: it.rate,
-          line_total: it.line_total,
-        }));
-
-        const { data: insertedItems, error: itemsErr } = await supabase
-          .from('delivery_items')
-          .insert(itemsToInsert)
-          .select();
-
-        if (itemsErr) {
-          console.error('Error inserting delivery items:', itemsErr);
-        }
-
-        return NextResponse.json({
-          success: true,
-          delivery: {
-            ...delivery,
-            items: insertedItems || processedItems,
+      // 1. Insert into deliveries
+      const { data: delivery, error: delErr } = await supabase
+        .from('deliveries')
+        .insert([
+          {
+            shop_id,
+            delivery_date,
+            total_amount,
+            notes: notes ? notes.trim() : null,
           },
-        });
-      } catch (dbErr) {
-        // Fallback
+        ])
+        .select()
+        .single();
+
+      if (delErr || !delivery) {
+        throw new Error(delErr?.message || 'Failed to insert delivery');
       }
+
+      // 2. Insert delivery_items
+      const itemsToInsert = processedItems.map((it) => ({
+        delivery_id: delivery.id,
+        product_id: it.product_id,
+        product_name: it.product_name,
+        product_unit: it.product_unit,
+        quantity: it.quantity,
+        rate: it.rate,
+        line_total: it.line_total,
+      }));
+
+      const { data: insertedItems, error: itemsErr } = await supabase
+        .from('delivery_items')
+        .insert(itemsToInsert)
+        .select();
+
+      if (itemsErr) {
+        console.error('Error inserting delivery items:', itemsErr);
+      }
+
+      return NextResponse.json({
+        success: true,
+        delivery: {
+          ...delivery,
+          items: insertedItems || processedItems,
+        },
+      });
     }
 
-    // In-memory mock
-    const newDelivery = {
-      id: `del_${Date.now()}`,
-      shop_id,
-      delivery_date,
-      total_amount,
-      notes: notes || '',
-      items: processedItems,
-      created_at: new Date().toISOString(),
-    };
-    mockDeliveries.unshift(newDelivery);
-
-    return NextResponse.json({ success: true, delivery: newDelivery });
+    return NextResponse.json(
+      { success: false, error: 'Supabase is not configured.' },
+      { status: 503 }
+    );
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }

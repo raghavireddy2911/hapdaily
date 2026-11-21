@@ -14,6 +14,7 @@ import {
 
 import { Product, OrderUnit } from '@/types';
 import { useCart } from '@/context/CartContext';
+import CustomPopup, { PopupConfig } from '@/components/CustomPopup';
 
 interface ProductCardProps {
   product: Product;
@@ -30,6 +31,7 @@ export default function ProductCard({
 
   const [orderUnit, setOrderUnit] = useState<OrderUnit>('packets');
   const [quantity, setQuantity] = useState(1);
+  const [popup, setPopup] = useState<PopupConfig | null>(null);
 
   // Retained for the informational packet-equivalent display only.
   // Change these rules if your actual packaging differs.
@@ -78,7 +80,13 @@ export default function ProductCard({
         Number(product.price_per_litre) < 0
       )
     ) {
-      alert('A valid litre price has not been set for this product.');
+      setPopup({
+        isOpen: true,
+        type: 'alert',
+        title: 'Litre Price Not Available',
+        message: 'A valid per-litre price has not been set for this item. Please select "Packets" to add it to your cart.',
+        confirmText: 'Understood',
+      });
       return;
     }
 
@@ -318,6 +326,8 @@ export default function ProductCard({
             : `Add ${quantity} Packet${quantity > 1 ? 's' : ''}`}
         </motion.button>
       </div>
+
+      <CustomPopup popup={popup} onClose={() => setPopup(null)} />
     </motion.div>
   );
 }

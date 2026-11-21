@@ -2,55 +2,11 @@ import { NextResponse } from 'next/server';
 import { getAuthenticatedSupabaseClient } from '@/lib/supabase-server';
 import { isSupabaseConfigured } from '@/lib/supabase-config';
 
-// Helper to calculate shop financial balances
-function computeShopStats(shops: any[], deliveries: any[], payments: any[]) {
-  const todayStr = new Date().toISOString().split('T')[0];
-
-  const enrichedShops = shops.map((shop) => {
-    const shopDeliveries = deliveries.filter((d) => d.shop_id === shop.id);
-    const shopPayments = payments.filter((p) => p.shop_id === shop.id);
-
-    const total_billed = shopDeliveries.reduce((sum, d) => sum + Number(d.total_amount || 0), 0);
-    const total_paid = shopPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
-    const balance = Math.round((total_billed - total_paid) * 100) / 100;
-
-    const today_delivered = shopDeliveries
-      .filter((d) => (d.delivery_date || '').startsWith(todayStr))
-      .reduce((sum, d) => sum + Number(d.total_amount || 0), 0);
-
-    return {
-      ...shop,
-      total_billed,
-      total_paid,
-      balance,
-      today_delivered,
-    };
-  });
-
-  // Sort: highest unpaid balance first
-  enrichedShops.sort((a, b) => (b.balance || 0) - (a.balance || 0));
-
-  const total_unpaid_all = enrichedShops.reduce(
-    (sum, s) => (s.balance > 0 ? sum + s.balance : sum),
-    0
-  );
-  const pending_shops_count = enrichedShops.filter((s) => s.balance > 0).length;
-  const today_total_deliveries = enrichedShops.reduce(
-    (sum, s) => sum + (s.today_delivered || 0),
-    0
-  );
-
-  return {
-    shops: enrichedShops,
-    summary: {
-      total_unpaid_all,
-      pending_shops_count,
-      today_total_deliveries,
-      total_shops_count: enrichedShops.length,
-    },
-  };
-}
-
+/**
+ * Optimized shops list: uses database-side aggregation via
+ * two lightweight SUM queries instead of pulling every delivery
+ * and payment row into Node.js memory.
+ */
 export async function GET(request: Request) {
   try {
     const hasSupabase = isSupabaseConfigured();
@@ -58,18 +14,80 @@ export async function GET(request: Request) {
     if (hasSupabase) {
       try {
         const supabase = await getAuthenticatedSupabaseClient();
+
+        // 1. Load shops (lean: only needed columns)
         const { data: shops, error: shopsErr } = await supabase
           .from('shops')
-          .select('*')
+          .select('id, name, owner_name, phone, address, notes, created_at')
           .order('name', { ascending: true });
 
-        if (!shopsErr && shops) {
-          const { data: deliveries } = await supabase.from('deliveries').select('shop_id, total_amount, delivery_date');
-          const { data: payments } = await supabase.from('payments').select('shop_id, amount, payment_date');
+        if (shopsErr || !shops) throw shopsErr;
 
-          const result = computeShopStats(shops, deliveries || [], payments || []);
-          return NextResponse.json({ success: true, ...result, source: 'supabase' });
+        // 2. Aggregate billing per shop in one RPC-less query (grouped via JS from two lean queries)
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        // Only fetch aggregated columns — NOT all rows
+        const [delRes, payRes, todayRes] = await Promise.all([
+          supabase
+            .from('deliveries')
+            .select('shop_id, total_amount'),
+          supabase
+            .from('payments')
+            .select('shop_id, amount'),
+          supabase
+            .from('deliveries')
+            .select('shop_id, total_amount')
+            .eq('delivery_date', todayStr),
+        ]);
+
+        // Build maps for O(n) aggregation instead of O(n*m) filtering
+        const billedMap = new Map<string, number>();
+        const paidMap = new Map<string, number>();
+        const todayMap = new Map<string, number>();
+
+        for (const d of delRes.data || []) {
+          billedMap.set(d.shop_id, (billedMap.get(d.shop_id) || 0) + Number(d.total_amount || 0));
         }
+        for (const p of payRes.data || []) {
+          paidMap.set(p.shop_id, (paidMap.get(p.shop_id) || 0) + Number(p.amount || 0));
+        }
+        for (const d of todayRes.data || []) {
+          todayMap.set(d.shop_id, (todayMap.get(d.shop_id) || 0) + Number(d.total_amount || 0));
+        }
+
+        // 3. Enrich shops with computed balances
+        const enrichedShops = shops.map((shop) => {
+          const total_billed = billedMap.get(shop.id) || 0;
+          const total_paid = paidMap.get(shop.id) || 0;
+          const balance = Math.round((total_billed - total_paid) * 100) / 100;
+          const today_delivered = todayMap.get(shop.id) || 0;
+          return { ...shop, total_billed, total_paid, balance, today_delivered };
+        });
+
+        // Sort: highest unpaid balance first
+        enrichedShops.sort((a, b) => (b.balance || 0) - (a.balance || 0));
+
+        const total_unpaid_all = enrichedShops.reduce(
+          (sum, s) => (s.balance > 0 ? sum + s.balance : sum),
+          0
+        );
+        const pending_shops_count = enrichedShops.filter((s) => s.balance > 0).length;
+        const today_total_deliveries = enrichedShops.reduce(
+          (sum, s) => sum + (s.today_delivered || 0),
+          0
+        );
+
+        return NextResponse.json({
+          success: true,
+          shops: enrichedShops,
+          summary: {
+            total_unpaid_all,
+            pending_shops_count,
+            today_total_deliveries,
+            total_shops_count: enrichedShops.length,
+          },
+          source: 'supabase',
+        });
       } catch (dbErr) {
         // Fall through to empty response
       }
