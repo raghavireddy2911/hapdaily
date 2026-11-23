@@ -1462,6 +1462,46 @@ export default function ShopsBillingSection({ products }: ShopsBillingSectionPro
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// HELPERS: PACKETS <-> LITRES CONVERSION
+// ────────────────────────────────────────────────────────────────────────────
+
+// Reads pack size from unit text like "500ml", "500 ml", "1L", "1 Litre", "250ml"
+// Returns litres per packet, or null if it can't be understood
+const getLitresPerPacket = (unit: string): number | null => {
+  const u = (unit || '').toLowerCase().replace(/\s+/g, '');
+  const m = u.match(/(\d+(?:\.\d+)?)(ml|millilitre|milliliter|ltr|litre|liter|l)\b/);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  return m[2] === 'ml' || m[2].startsWith('milli') ? n / 1000 : n;
+};
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+type DeliveryLine = {
+  product_id: string;
+  product_name: string;
+  product_unit: string;
+  quantity: number; // ALWAYS packets (this is what gets saved)
+  rate: number; // per packet
+  line_total: number;
+  inputMode: 'packets' | 'litres';
+  inputValue: string; // what the owner is typing
+  litresPerPacket: number | null;
+};
+
+const makeLine = (p: Product, rate: number, qty = 0): DeliveryLine => ({
+  product_id: p.id,
+  product_name: p.name,
+  product_unit: p.unit,
+  quantity: qty,
+  rate,
+  line_total: round2(qty * rate),
+  inputMode: 'packets',
+  inputValue: qty === 0 ? '' : String(qty),
+  litresPerPacket: getLitresPerPacket(p.unit),
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // SUB-COMPONENT: DAILY DELIVERY ENTRY MODAL (WITH LIVE AUTO-CALCULATOR)
 // ────────────────────────────────────────────────────────────────────────────
 function DailyDeliveryModal({
@@ -1483,16 +1523,7 @@ function DailyDeliveryModal({
   const [popup, setPopup] = useState<PopupConfig | null>(null);
 
   // Line items state
-  const [lines, setLines] = useState<
-    Array<{
-      product_id: string;
-      product_name: string;
-      product_unit: string;
-      quantity: number;
-      rate: number;
-      line_total: number;
-    }>
-  >([]);
+  const [lines, setLines] = useState<DeliveryLine[]>([]);
 
   // Fetch this shop's special rates
   useEffect(() => {
@@ -1510,30 +1541,65 @@ function DailyDeliveryModal({
   // Prepopulate with top products
   useEffect(() => {
     if (products.length > 0 && lines.length === 0) {
-      const initial = products.slice(0, 3).map((p) => {
-        const custom = shopRates.find((r) => r.product_id === p.id);
-        const rate = custom && custom.rate > 0 ? custom.rate : p.price;
-        return {
-          product_id: p.id,
-          product_name: p.name,
-          product_unit: p.unit,
-          quantity: 0,
-          rate,
-          line_total: 0,
-        };
-      });
-      setLines(initial);
+      setLines(
+        products.slice(0, 3).map((p) => {
+          const custom = shopRates.find((r) => r.product_id === p.id);
+          return makeLine(p, custom && custom.rate > 0 ? custom.rate : p.price);
+        })
+      );
     }
   }, [products, shopRates]);
 
-  const updateQuantity = (index: number, qty: number) => {
-    setLines((prev) => {
-      const updated = [...prev];
-      const safeQty = Math.max(0, qty);
-      updated[index].quantity = safeQty;
-      updated[index].line_total = Math.round(safeQty * updated[index].rate * 100) / 100;
-      return updated;
-    });
+  // Apply a new quantity (in PACKETS) to a line
+  const applyPackets = (line: DeliveryLine, packets: number, inputValue: string): DeliveryLine => {
+    const safe = Math.max(0, packets);
+    return {
+      ...line,
+      quantity: safe,
+      line_total: round2(safe * line.rate),
+      inputValue,
+    };
+  };
+
+  // Owner typed in the box
+  const handleInputChange = (index: number, text: string) => {
+    setLines((prev) =>
+      prev.map((line, i) => {
+        if (i !== index) return line;
+        const val = parseFloat(text);
+        if (isNaN(val)) return applyPackets(line, 0, text);
+        if (line.inputMode === 'litres' && line.litresPerPacket) {
+          return applyPackets(line, val / line.litresPerPacket, text);
+        }
+        return applyPackets(line, Math.floor(val), text);
+      })
+    );
+  };
+
+  // +/- buttons (delta is in whichever unit is selected: packets or litres)
+  const adjustBy = (index: number, delta: number) => {
+    setLines((prev) =>
+      prev.map((line, i) => {
+        if (i !== index) return line;
+        const isLitres = line.inputMode === 'litres' && !!line.litresPerPacket;
+        const current = isLitres ? line.quantity * line.litresPerPacket! : line.quantity;
+        const next = Math.max(0, round2(current + delta));
+        const packets = isLitres ? next / line.litresPerPacket! : next;
+        return applyPackets(line, packets, next === 0 ? '' : String(next));
+      })
+    );
+  };
+
+  const setInputMode = (index: number, mode: 'packets' | 'litres') => {
+    setLines((prev) =>
+      prev.map((line, i) => {
+        if (i !== index) return line;
+        if (mode === 'litres' && !line.litresPerPacket) return line;
+        const shown =
+          mode === 'litres' ? round2(line.quantity * line.litresPerPacket!) : line.quantity;
+        return { ...line, inputMode: mode, inputValue: shown === 0 ? '' : String(shown) };
+      })
+    );
   };
 
   const addProductLine = (productId: string) => {
@@ -1541,18 +1607,7 @@ function DailyDeliveryModal({
     if (!prod) return;
     const custom = shopRates.find((r) => r.product_id === prod.id);
     const rate = custom && custom.rate > 0 ? custom.rate : prod.price;
-
-    setLines((prev) => [
-      ...prev,
-      {
-        product_id: prod.id,
-        product_name: prod.name,
-        product_unit: prod.unit,
-        quantity: 10,
-        rate,
-        line_total: Math.round(10 * rate * 100) / 100,
-      },
-    ]);
+    setLines((prev) => [...prev, makeLine(prod, rate, 10)]);
   };
 
   const removeLine = (index: number) => {
@@ -1567,6 +1622,12 @@ function DailyDeliveryModal({
   const totalPackets = useMemo(() => {
     return lines.reduce((sum, it) => sum + (it.quantity || 0), 0);
   }, [lines]);
+
+  const totalLitres = useMemo(
+    () =>
+      lines.reduce((s, it) => s + (it.litresPerPacket ? it.quantity * it.litresPerPacket : 0), 0),
+    [lines]
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1592,7 +1653,14 @@ function DailyDeliveryModal({
         body: JSON.stringify({
           delivery_date: deliveryDate,
           notes,
-          items: activeItems,
+          items: activeItems.map((it) => ({
+            product_id: it.product_id,
+            product_name: it.product_name,
+            product_unit: it.product_unit,
+            quantity: it.quantity,
+            rate: it.rate,
+            line_total: it.line_total,
+          })),
         }),
       });
       const data = await res.json();
@@ -1707,56 +1775,92 @@ function DailyDeliveryModal({
                   </p>
                 </div>
 
-                {/* Big Easy Quantity Controls for Father */}
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => updateQuantity(idx, line.quantity - 10)}
-                    className="w-8 h-8 rounded-xl bg-white border border-gray-200 font-black text-gray-700 hover:bg-gray-100 flex items-center justify-center text-xs"
-                    title="-10 packets"
-                  >
-                    -10
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateQuantity(idx, line.quantity - 1)}
-                    className="w-8 h-8 rounded-xl bg-white border border-gray-200 font-black text-gray-700 hover:bg-gray-100 flex items-center justify-center text-sm"
-                    title="-1 packet"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    min="0"
-                    value={line.quantity === 0 ? '' : line.quantity}
-                    onChange={(e) => updateQuantity(idx, parseInt(e.target.value, 10) || 0)}
-                    placeholder="0"
-                    className="w-16 h-8 text-center font-black text-base bg-white border border-emerald-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => updateQuantity(idx, line.quantity + 1)}
-                    className="w-8 h-8 rounded-xl bg-white border border-gray-200 font-black text-gray-700 hover:bg-gray-100 flex items-center justify-center text-sm"
-                    title="+1 packet"
-                  >
-                    +
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateQuantity(idx, line.quantity + 10)}
-                    className="w-8 h-8 rounded-xl bg-white border border-gray-200 font-black text-emerald-700 hover:bg-emerald-50 flex items-center justify-center text-xs"
-                    title="+10 packets"
-                  >
-                    +10
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateQuantity(idx, line.quantity + 20)}
-                    className="w-8 h-8 rounded-xl bg-emerald-50 border border-emerald-200 font-black text-emerald-800 hover:bg-emerald-100 flex items-center justify-center text-xs"
-                    title="+20 packets"
-                  >
-                    +20
-                  </button>
+                {/* Quantity Controls with Packets / Litres toggle */}
+                <div className="flex flex-col items-end gap-1.5">
+                  {/* Toggle */}
+                  <div className="flex bg-white border border-gray-200 rounded-xl p-0.5 text-[11px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setInputMode(idx, 'packets')}
+                      className={`px-2.5 py-1 rounded-lg transition ${
+                        line.inputMode === 'packets' ? 'bg-emerald-600 text-white' : 'text-gray-500'
+                      }`}
+                    >
+                      Packets
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!line.litresPerPacket}
+                      onClick={() => setInputMode(idx, 'litres')}
+                      title={!line.litresPerPacket ? 'Pack size not found in product unit' : ''}
+                      className={`px-2.5 py-1 rounded-lg transition disabled:opacity-40 ${
+                        line.inputMode === 'litres' ? 'bg-emerald-600 text-white' : 'text-gray-500'
+                      }`}
+                    >
+                      Litres
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => adjustBy(idx, -10)}
+                      className="w-8 h-8 rounded-xl bg-white border border-gray-200 font-black text-gray-700 hover:bg-gray-100 flex items-center justify-center text-xs"
+                      title="-10"
+                    >
+                      -10
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => adjustBy(idx, -1)}
+                      className="w-8 h-8 rounded-xl bg-white border border-gray-200 font-black text-gray-700 hover:bg-gray-100 flex items-center justify-center text-sm"
+                      title="-1"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min="0"
+                      step={line.inputMode === 'litres' ? '0.5' : '1'}
+                      value={line.inputValue}
+                      onChange={(e) => handleInputChange(idx, e.target.value)}
+                      placeholder="0"
+                      className="w-16 h-8 text-center font-black text-base bg-white border border-emerald-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => adjustBy(idx, 1)}
+                      className="w-8 h-8 rounded-xl bg-white border border-gray-200 font-black text-gray-700 hover:bg-gray-100 flex items-center justify-center text-sm"
+                      title="+1"
+                    >
+                      +
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => adjustBy(idx, 10)}
+                      className="w-8 h-8 rounded-xl bg-white border border-gray-200 font-black text-emerald-700 hover:bg-emerald-50 flex items-center justify-center text-xs"
+                      title="+10"
+                    >
+                      +10
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => adjustBy(idx, 20)}
+                      className="w-8 h-8 rounded-xl bg-emerald-50 border border-emerald-200 font-black text-emerald-800 hover:bg-emerald-100 flex items-center justify-center text-xs"
+                      title="+20"
+                    >
+                      +20
+                    </button>
+                  </div>
+
+                  {/* Show the equivalent so nothing is confusing */}
+                  {line.quantity > 0 && line.litresPerPacket && (
+                    <p className="text-[11px] text-gray-500">
+                      {line.inputMode === 'litres'
+                        ? `= ${round2(line.quantity)} packets`
+                        : `= ${round2(line.quantity * line.litresPerPacket)} litres`}
+                    </p>
+                  )}
                 </div>
 
                 {/* Line Total */}
@@ -1785,7 +1889,8 @@ function DailyDeliveryModal({
                 Automatic Calculation
               </span>
               <p className="text-xs text-gray-600 mt-0.5">
-                Total packets: <strong className="text-gray-900">{totalPackets} units</strong>
+                Total packets: <strong className="text-gray-900">{round2(totalPackets)}</strong> • Litres:{' '}
+                <strong className="text-gray-900">{round2(totalLitres)} L</strong>
               </p>
             </div>
             <div className="text-right">
@@ -1991,4 +2096,3 @@ function ShopRatesModal({
     </div>
   );
 }
-
