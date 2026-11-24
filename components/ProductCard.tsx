@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useRef, useState } from 'react';
@@ -15,6 +14,7 @@ import {
 import { Product, OrderUnit } from '@/types';
 import { useCart } from '@/context/CartContext';
 import CustomPopup, { PopupConfig } from '@/components/CustomPopup';
+import { getLitresPerPacket, round2 } from '@/lib/units';
 
 interface ProductCardProps {
   product: Product;
@@ -33,19 +33,13 @@ export default function ProductCard({
   const [quantity, setQuantity] = useState(1);
   const [popup, setPopup] = useState<PopupConfig | null>(null);
 
-  // Retained for the informational packet-equivalent display only.
-  // Change these rules if your actual packaging differs.
-  const productName = product.name.toLowerCase();
-
-  const packetsPerLitre = productName.includes('small')
-    ? 5
-    : productName.includes('big')
-      ? 2
-      : 1;
+  // Pack size comes from the product itself (litres_per_packet, or read from the unit text)
+  const litresPerPacket = getLitresPerPacket(product);
+  const packetsPerLitre = litresPerPacket ? 1 / litresPerPacket : null;
 
   const packetQuantity =
-    orderUnit === 'litres'
-      ? quantity * packetsPerLitre
+    orderUnit === 'litres' && packetsPerLitre
+      ? round2(quantity * packetsPerLitre)
       : quantity;
 
   // Packets use price; litres use the saved litre price.
@@ -95,7 +89,7 @@ export default function ProductCard({
       imageRef as RefObject<HTMLElement | null>,
       quantity,
       orderUnit,
-      packetsPerLitre
+      packetsPerLitre ?? 1
     );
   };
 
@@ -195,11 +189,13 @@ export default function ProductCard({
 
               <button
                 type="button"
+                disabled={!packetsPerLitre}
+                title={!packetsPerLitre ? 'Pack size not set for this product' : ''}
                 onClick={() => {
                   setOrderUnit('litres');
                   setQuantity(1);
                 }}
-                className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${
+                className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition disabled:opacity-40 ${
                   orderUnit === 'litres'
                     ? 'border-emerald-600 bg-emerald-600 text-white'
                     : 'border-gray-200 bg-white text-gray-600 hover:border-emerald-400'
@@ -273,6 +269,9 @@ export default function ProductCard({
 
               <p className="mt-1 text-sm font-bold text-emerald-700">
                 {packetQuantity} packets
+              </p>
+              <p className="mt-0.5 text-[11px] text-emerald-700">
+                1 litre = {packetsPerLitre ? round2(packetsPerLitre) : '?'} packets
               </p>
             </div>
           )}

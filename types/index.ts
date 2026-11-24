@@ -8,6 +8,7 @@ export interface Product {
   description: string;
   price: number;
   price_per_litre?: number | null;
+  litres_per_packet?: number | string | null;
   image_url: string;
   category: string;
   unit: string;

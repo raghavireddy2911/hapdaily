@@ -37,6 +37,7 @@ const EMPTY_PRODUCT: Product = {
   description: '',
   price: 32,
   price_per_litre: null,
+  litres_per_packet: null, // NEW
   image_url: 'https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600&q=80',
   category: 'Milk',
   unit: '500ml',
@@ -79,6 +80,7 @@ export default function AdminDashboard() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isNewProduct, setIsNewProduct] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [packetsPerLitreText, setPacketsPerLitreText] = useState(''); // NEW
   const [loading, setLoading] = useState(false);
   const [dateString, setDateString] = useState('');
 
@@ -136,6 +138,17 @@ export default function AdminDashboard() {
     const t = setTimeout(() => setError(null), 5000);
     return () => clearTimeout(t);
   }, [error]);
+
+  // NEW: fill the "1 litre = ? packets" box when a product is opened
+  useEffect(() => {
+    if (!editingProduct) {
+      setPacketsPerLitreText('');
+      return;
+    }
+    const lpp = Number(editingProduct.litres_per_packet);
+    setPacketsPerLitreText(lpp > 0 ? String(Math.round((1 / lpp) * 100) / 100) : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingProduct?.id]);
 
   // Debounce search input (250ms) to avoid re-filtering on every keystroke
   useEffect(() => {
@@ -544,6 +557,11 @@ export default function AdminDashboard() {
                           <span className="font-normal text-gray-400"> / litre</span>
                         </span>
                       ) : null}
+                      {Number(prod.litres_per_packet) > 0 ? (
+                        <span className="ml-2 text-blue-700">
+                          1 L = {Math.round((1 / Number(prod.litres_per_packet)) * 100) / 100} pkts
+                        </span>
+                      ) : null}
                     </p>
                   </div>
                 </div>
@@ -898,6 +916,34 @@ export default function AdminDashboard() {
                   />
                   <p className="text-[11px] text-gray-400 mt-1">
                     Separate from the packet price. Leave empty if not sold by the litre.
+                  </p>
+                </div>
+
+                {/* NEW: Packets in one litre */}
+                <div>
+                  <label className="font-bold text-gray-700 mb-1 block">
+                    1 Litre = how many packets?
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={packetsPerLitreText}
+                    onChange={(e) => {
+                      const text = e.target.value;
+                      setPacketsPerLitreText(text);
+                      const n = parseFloat(text);
+                      patchEditing({
+                        litres_per_packet: n > 0 ? Math.round((1 / n) * 10000) / 10000 : null,
+                      });
+                    }}
+                    placeholder="e.g. 2 for 500 ml, 5 for 200 ml"
+                    className={`${inputClass} font-bold`}
+                  />
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    {Number(editingProduct.litres_per_packet) > 0
+                      ? `1 packet = ${Math.round(Number(editingProduct.litres_per_packet) * 1000)} ml`
+                      : 'Leave empty to read the size from the Unit text.'}
                   </p>
                 </div>
 
